@@ -80,7 +80,7 @@ class PaystackService
 
         try {
             $response = Http::withToken($this->secretKey)
-                ->timeout(10)
+                ->timeout(10)->
                 ->connectTimeout(5)
                 ->get("https://api.paystack.co/transaction/verify/{$reference}");
 

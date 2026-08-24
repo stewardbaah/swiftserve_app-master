@@ -1,9 +1,23 @@
 <?php
 
+use App\Filament\Admin\Pages\Dashboard as AdminDashboard;
+use App\Filament\Admin\Widgets\LatestOrdersWidget;
+use App\Filament\Admin\Widgets\OrderStatusChart;
+use App\Filament\Admin\Widgets\PlatformStatsOverview;
+use App\Filament\Admin\Widgets\RevenueTrendChart;
+use App\Filament\Pages\Dashboard as MerchantDashboard;
 use App\Filament\Pages\Tenancy\RegisterRestaurant;
+use App\Filament\Widgets\MerchantActiveOrdersWidget;
 use App\Filament\Widgets\MerchantApprovalWidget;
+use App\Filament\Widgets\MerchantMenuReadiness;
+use App\Filament\Widgets\MerchantRevenueTrendChart;
+use App\Filament\Widgets\MerchantStatsOverview;
 use App\Models\City;
+use App\Models\Complaint;
+use App\Models\MenuItem;
+use App\Models\Order;
 use App\Models\Restaurant;
+use App\Models\Review;
 use App\Models\Team;
 use App\Models\User;
 use Filament\Facades\Filament;
@@ -28,6 +42,132 @@ test('admin user can access admin panel', function () {
     $this->actingAs($user)
         ->get('/admin')
         ->assertSuccessful();
+});
+
+test('admin dashboard registers operational widgets', function () {
+    $widgets = app(AdminDashboard::class)->getWidgets();
+
+    expect($widgets)->toBe([
+        PlatformStatsOverview::class,
+        RevenueTrendChart::class,
+        OrderStatusChart::class,
+        LatestOrdersWidget::class,
+    ]);
+});
+
+test('admin dashboard widgets render platform metrics and active orders', function () {
+    $admin = User::factory()->create(['is_admin' => true]);
+    $customer = User::factory()->create(['name' => 'Ada Customer']);
+    $restaurant = Restaurant::factory()->create(['name' => 'Prime Bites', 'is_approved' => false]);
+
+    $order = Order::factory()->create([
+        'user_id' => $customer->id,
+        'restaurant_id' => $restaurant->id,
+        'order_number' => 'SS-DASH01',
+        'status' => 'preparing',
+        'payment_status' => 'paid',
+        'total' => 4250,
+        'created_at' => now(),
+    ]);
+
+    Review::query()->create([
+        'user_id' => $customer->id,
+        'restaurant_id' => $restaurant->id,
+        'order_id' => $order->id,
+        'rating' => 5,
+        'comment' => 'Excellent.',
+    ]);
+
+    Complaint::query()->create([
+        'user_id' => $customer->id,
+        'restaurant_id' => $restaurant->id,
+        'order_id' => $order->id,
+        'reason' => 'late_delivery',
+        'details' => 'The order took longer than expected.',
+        'status' => 'open',
+    ]);
+
+    $this->actingAs($admin);
+    Filament::setCurrentPanel('admin');
+
+    Livewire::test(PlatformStatsOverview::class)
+        ->assertSee('Today revenue')
+        ->assertSee('Active orders')
+        ->assertSee('Open complaints');
+
+    Livewire::test(LatestOrdersWidget::class)
+        ->assertSee('SS-DASH01')
+        ->assertSee('Prime Bites')
+        ->assertSee('Ada Customer');
+});
+
+test('merchant dashboard registers focused operational widgets', function () {
+    $widgets = app(MerchantDashboard::class)->getWidgets();
+
+    expect($widgets)->toBe([
+        MerchantApprovalWidget::class,
+        MerchantStatsOverview::class,
+        MerchantRevenueTrendChart::class,
+        MerchantMenuReadiness::class,
+        MerchantActiveOrdersWidget::class,
+    ]);
+});
+
+test('merchant dashboard widgets render tenant scoped operations', function () {
+    $user = User::factory()->create();
+    $customer = User::factory()->create(['name' => 'Merchant Customer']);
+    $restaurant = Restaurant::factory()->create(['name' => 'Merchant Kitchen']);
+    $otherRestaurant = Restaurant::factory()->create(['name' => 'Other Kitchen']);
+
+    $user->teams()->attach($restaurant->team, ['role' => 'owner']);
+    $user->update(['current_team_id' => $restaurant->team_id]);
+
+    Order::factory()->create([
+        'user_id' => $customer->id,
+        'restaurant_id' => $restaurant->id,
+        'order_number' => 'SS-MERCH01',
+        'status' => 'preparing',
+        'payment_status' => 'paid',
+        'total' => 3200,
+        'created_at' => now(),
+    ]);
+
+    Order::factory()->create([
+        'restaurant_id' => $otherRestaurant->id,
+        'order_number' => 'SS-OTHER01',
+        'status' => 'preparing',
+        'payment_status' => 'paid',
+        'total' => 9900,
+        'created_at' => now(),
+    ]);
+
+    MenuItem::factory()->create([
+        'restaurant_id' => $restaurant->id,
+        'is_available' => true,
+    ]);
+
+    MenuItem::factory()->create([
+        'restaurant_id' => $restaurant->id,
+        'is_available' => false,
+    ]);
+
+    $this->actingAs($user);
+    Filament::setCurrentPanel('merchant');
+    Filament::setTenant($restaurant);
+
+    Livewire::test(MerchantStatsOverview::class)
+        ->assertSee('Today revenue')
+        ->assertSee('Orders today')
+        ->assertSee('Service modes');
+
+    Livewire::test(MerchantMenuReadiness::class)
+        ->assertSee('Available items')
+        ->assertSee('Paused items');
+
+    Livewire::test(MerchantActiveOrdersWidget::class)
+        ->assertSee('SS-MERCH01')
+        ->assertSee('Merchant Customer')
+        ->assertDontSee('SS-OTHER01');
 });
 
 test('tenant registration sets is_approved to false', function () {
